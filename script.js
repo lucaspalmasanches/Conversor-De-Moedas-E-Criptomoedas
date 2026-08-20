@@ -139,6 +139,18 @@ async function convertValues() {
     const fromInfo = CURRENCY_MAP[selectedCurrencyFromKey]
     const toInfo = CURRENCY_MAP[selectedCurrencyToKey]
 
+    if (fromInfo.code === toInfo.code) {
+        const inputValue = parseFloat(rawInputValue)
+        if (isNaN(inputValue) || inputValue < 0) {
+            currencyValueToConvert.innerHTML = formatCurrency(0, fromInfo.locale, fromInfo.code)
+            currencyValueConverted.innerHTML = "Valor inválido."
+        } else {
+            currencyValueToConvert.innerHTML = formatCurrency(inputValue, fromInfo.locale, fromInfo.code)
+            currencyValueConverted.innerHTML = formatCurrency(inputValue, toInfo.locale, toInfo.code)
+        }
+        return
+    }
+
     if (rawInputValue.trim() === "") {
         currencyValueToConvert.innerHTML = formatCurrency(0, fromInfo.locale, fromInfo.code)
         currencyValueConverted.innerHTML = formatCurrency(0, toInfo.locale, toInfo.code)
@@ -159,25 +171,33 @@ async function convertValues() {
         return
     }
 
-    if (!currentExchangeRates) {
+    const needsFiatAPI = (fromInfo.code !== SETTINGS.COMMON_BASE_CURRENCY && !fromInfo.isCrypto) ||
+        (toInfo.code !== SETTINGS.COMMON_BASE_CURRENCY && !toInfo.isCrypto) ||
+        (fromInfo.isCrypto && (fromInfo.code === "BTC" && !currentExchangeRates?.BRL)) ||
+        (toInfo.isCrypto && (toInfo.code === "BTC" && !currentExchangeRates?.BRL))
+
+    if (needsFiatAPI && !currentExchangeRates) {
         console.log(`Buscando cotações fiat com ${SETTINGS.COMMON_BASE_CURRENCY} como base...`)
         currentExchangeRates = await buscarCotacoesMoeda(SETTINGS.COMMON_BASE_CURRENCY)
     }
-    if (!currentExchangeRates) {
-        console.error("Não foi possível obter as taxas de câmbio fiat. Conversão não realizada.")
-        currencyValueConverted.innerHTML = "Erro ao carregar taxas fiat."
+
+    if (needsFiatAPI && !currentExchangeRates) {
+        console.error("Erro: Não foi possível obter as taxas de moedas fiduciárias.")
+        currencyValueConverted.innerHTML = "Erro: Não foi possível carregar as taxas de moedas fiduciárias. Verifique sua chave API."
         return
     }
-    if (fromInfo.isCrypto || toInfo.isCrypto) {
-        if (!currentBitcoinRateInBRL) {
-            console.log("Buscando cotação de Bitcoin em BRL...")
-            currentBitcoinRateInBRL = await buscarCotacoesCrypto("BTCBRL")
-        }
-        if (!currentBitcoinRateInBRL) {
-            console.error("Não foi possível obter a cotação do Bitcoin. Conversão não realizada.")
-            currencyValueConverted.innerHTML = "Erro ao carregar cotação de BTC."
-            return
-        }
+
+    const needsCryptoAPI = fromInfo.isCrypto || toInfo.isCrypto
+
+    if (needsCryptoAPI && !currentBitcoinRateInBRL) {
+        console.log("Buscando cotação de Bitcoin em BRL...")
+        currentBitcoinRateInBRL = await buscarCotacoesCrypto("BTCBRL")
+    }
+
+    if (needsCryptoAPI && !currentBitcoinRateInBRL) {
+        console.error("Erro: Não foi possível carregar a cotação do Bitcoin.")
+        currencyValueConverted.innerHTML = "Erro: Não foi possível carregar a cotação do Bitcoin. Tente novamente mais tarde."
+        return
     }
 
     currencyValueToConvert.innerHTML = formatCurrency(inputValue, fromInfo.locale, fromInfo.code)
@@ -187,17 +207,24 @@ async function convertValues() {
     if (fromInfo.code === SETTINGS.COMMON_BASE_CURRENCY) {
         valueInUSD = inputValue
     } else if (fromInfo.isCrypto) {
-        if (!currentBitcoinRateInBRL || !currentExchangeRates.BRL) {
-            console.error("Taxas necessárias para BTC->USD não disponíveis.")
-            currencyValueConverted.innerHTML = "Taxas BTC->USd indisponíveis."
+        if (!currentBitcoinRateInBRL) {
+            console.error("Erro: Cotação de Bitcoin indisponível para conversão.")
+            currencyValueConverted.innerHTML = "Erro: Cotação de Bitcoin indisponível."
             return
         }
+        if (!currentExchangeRates?.BRL) {
+            console.error(`Erro: Taxa ${CURRENCY_MAP.real.symbol}-${SETTINGS.COMMON_BASE_CURRENCY} indisponível (necessária para Bitcoin).`)
+            currencyValueConverted.innerHTML = `Erro: Taxa ${CURRENCY_MAP.real.symbol}-${SETTINGS.COMMON_BASE_CURRENCY} indisponível.`
+            return
+        }
+
         const valueInBRL = inputValue * currentBitcoinRateInBRL
         valueInUSD = valueInBRL / currentExchangeRates.BRL
+
     } else {
-        if (!currentExchangeRates[fromInfo.code]) {
-            console.error(`Taxa de ${fromInfo.code} para USD não encontrada.`)
-            currencyValueConverted.innerHTML = `Taxa de ${fromInfo.code} indisponível.`
+        if (!currentExchangeRates?.[fromInfo.code]) {
+            console.error(`Erro: Taxa de ${fromInfo.name} (${fromInfo.symbol}) para ${SETTINGS.COMMON_BASE_CURRENCY} indisponível.`)
+            currencyValueConverted.innerHTML = `Erro: Taxa ${fromInfo.symbol}-${SETTINGS.COMMON_BASE_CURRENCY} indisponível.`
             return
         }
         valueInUSD = inputValue / currentExchangeRates[fromInfo.code]
@@ -208,17 +235,25 @@ async function convertValues() {
     if (toInfo.code === SETTINGS.COMMON_BASE_CURRENCY) {
         convertedValue = valueInUSD
     } else if (toInfo.isCrypto) {
-        if (!currentBitcoinRateInBRL || !currentExchangeRates.BRL) {
-            console.error("Taxas necessárias para USD->BTC não disponíveis.")
-            currencyValueConverted.innerHTML = "Taxas USD->BTC indisponíveis."
+        if (!currentBitcoinRateInBRL) {
+            console.error("Erro: Cotação de Bitcoin indisponível para conversão.")
+            currencyValueConverted.innerHTML = "Erro: Cotação de Bitcoin indisponível."
             return
         }
+
+        if (!currentExchangeRates?.BRL) {
+            console.error(`Erro: Taxa ${CURRENCY_MAP.real.symbol}-${SETTINGS.COMMON_BASE_CURRENCY} indisponível (necessária para Bitcoin).`)
+            currencyValueConverted.innerHTML = `Erro: Taxa ${CURRENCY_MAP.real.symbol}-${SETTINGS.COMMON_BASE_CURRENCY} indisponível.`
+            return
+        }
+
         const valueInBRL = valueInUSD * currentExchangeRates.BRL
         convertedValue = valueInBRL / currentBitcoinRateInBRL
+
     } else {
-        if (!currentExchangeRates[toInfo.code]) {
-            console.error(`Taxa de ${toInfo.code} para USD não encontrada.`)
-            currencyValueConverted.innerHTML = `Taxa de ${toInfo.code} indisponível.`
+        if (!currentExchangeRates?.[toInfo.code]) {
+            console.error(`Erro: Taxa de ${toInfo.name} (${toInfo.symbol}) para ${SETTINGS.COMMON_BASE_CURRENCY} indisponível.`)
+            currencyValueConverted.innerHTML = `Erro: Taxa ${toInfo.symbol}-${SETTINGS.COMMON_BASE_CURRENCY} indisponível.`
             return
         }
         convertedValue = valueInUSD * currentExchangeRates[toInfo.code]
